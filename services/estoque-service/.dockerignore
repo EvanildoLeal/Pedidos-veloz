@@ -1,0 +1,44 @@
+# Dependências
+node_modules
+npm-debug.log
+package-lock.json
+
+# Ambiente
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.gitignore
+.github
+
+# Docker
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
+
+# Logs
+logs
+*.log
+
+# Testes
+test
+tests
+coverage
+*.test.js
+*.spec.js
+
+# Sistema
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+*.swp
+*.swo
+
+# Build
+dist
+build
+*.tgz
