@@ -1,0 +1,60 @@
+name: Ìºç Configura√ß√£o de Ambientes
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'A√ß√£o'
+        required: true
+        default: 'status'
+        type: choice
+        options:
+          - status
+          - restart
+          - rollback
+
+jobs:
+  manage:
+    name: Ì≥ã Gerenciar Ambiente
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [staging, production]
+    
+    steps:
+    - name: Ì≥• Checkout
+      uses: actions/checkout@v4
+
+    - name: Ì¥ß Setup kubectl
+      uses: azure/setup-kubectl@v4
+
+    - name: Ì¥ê Configurar kubeconfig
+      run: |
+        echo "${{ secrets[format('KUBE_CONFIG_{0}', matrix.environment)] }}" | base64 -d > $HOME/.kube/config 2>/dev/null || true
+
+    - name: Ì≥ä Status do ambiente
+      if: github.event.inputs.action == 'status'
+      run: |
+        echo "## Ì≥ä Status do Ambiente: ${{ matrix.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Pods" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        kubectl get pods -n pedidos-veloz >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Servi√ßos" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        kubectl get svc -n pedidos-veloz >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
+    - name: Ì¥Ñ Restart
+      if: github.event.inputs.action == 'restart'
+      run: |
+        kubectl rollout restart deployment -n pedidos-veloz --all
+        kubectl rollout status deployment -n pedidos-veloz --timeout=5m
+
+    - name: ‚è™ Rollback
+      if: github.event.inputs.action == 'rollback'
+      run: |
+        kubectl rollout undo deployment -n pedidos-veloz --all
+        kubectl rollout status deployment -n pedidos-veloz --timeout=5m

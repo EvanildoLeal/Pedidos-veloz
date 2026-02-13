@@ -1,0 +1,210 @@
+name: íº€ CD - Continuous Deployment
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Ambiente para deploy'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  REGISTRY: docker.io
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+  KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+
+jobs:
+  # ===== JOB 1: BUILD E PUSH DAS IMAGENS =====
+  build-and-push:
+    name: í³¦ Build e Push das Imagens
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [pedidos-service, pagamentos-service, estoque-service]
+    
+    steps:
+    - name: í³¥ Checkout do cÃ³digo
+      uses: actions/checkout@v4
+
+    - name: í´§ Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: í´ Login no Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: í¿·ï¸ Extrair metadados da imagem
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}
+        tags: |
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+          type=ref,event=branch
+          type=ref,event=pr
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: í³¦ Build e Push
+      uses: docker/build-push-action@v5
+      with:
+        context: services/${{ matrix.service }}
+        file: services/${{ matrix.service }}/Dockerfile.production
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+
+    - name: í³ Gerar SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        path: services/${{ matrix.service }}
+        format: spdx-json
+        output-file: sbom-${{ matrix.service }}.spdx.json
+
+    - name: í³¤ Upload SBOM
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom-${{ matrix.service }}
+        path: sbom-*.spdx.json
+
+  # ===== JOB 2: DEPLOY STAGING =====
+  deploy-staging:
+    name: íº€ Deploy Staging
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://staging.pedidos-veloz.com
+    
+    steps:
+    - name: í³¥ Checkout do cÃ³digo
+      uses: actions/checkout@v4
+
+    - name: í´§ Setup kubectl
+      uses: azure/setup-kubectl@v4
+      with:
+        version: 'latest'
+
+    - name: í´ Configurar kubeconfig
+      run: |
+        mkdir -p $HOME/.kube
+        echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > $HOME/.kube/config 2>/dev/null || echo "${{ secrets.KUBE_CONFIG_STAGING }}" > $HOME/.kube/config
+
+    - name: í³¦ Deploy no Kubernetes
+      run: |
+        kubectl apply -f kubernetes/base/
+        kubectl apply -f kubernetes/services/
+        kubectl apply -f kubernetes/hpa/
+        
+        # Atualizar imagens com a tag do commit
+        TAG=${GITHUB_SHA::7}
+        kubectl set image deployment/pedidos-service \
+          pedidos-service=${{ secrets.DOCKER_USERNAME }}/pedidos-service:sha-${TAG} \
+          -n pedidos-veloz --record
+        kubectl set image deployment/pagamentos-service \
+          pagamentos-service=${{ secrets.DOCKER_USERNAME }}/pagamentos-service:sha-${TAG} \
+          -n pedidos-veloz --record
+        kubectl set image deployment/estoque-service \
+          estoque-service=${{ secrets.DOCKER_USERNAME }}/estoque-service:sha-${TAG} \
+          -n pedidos-veloz --record
+
+    - name: âœ… Verificar rollout
+      run: |
+        kubectl rollout status deployment/pedidos-service -n pedidos-veloz --timeout=5m
+        kubectl rollout status deployment/pagamentos-service -n pedidos-veloz --timeout=5m
+        kubectl rollout status deployment/estoque-service -n pedidos-veloz --timeout=5m
+
+    - name: í´ Health check
+      run: |
+        kubectl port-forward -n pedidos-veloz svc/pedidos-service 3001:3001 &
+        sleep 5
+        curl -f http://localhost:3001/health || exit 1
+        pkill -f "kubectl port-forward"
+
+  # ===== JOB 3: DEPLOY PRODUCTION (CANARY) =====
+  deploy-production:
+    name: í¾¯ Deploy Production (Canary)
+    needs: deploy-staging
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.environment == 'production'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://api.pedidos-veloz.com
+    
+    steps:
+    - name: í³¥ Checkout do cÃ³digo
+      uses: actions/checkout@v4
+
+    - name: í´§ Setup kubectl
+      uses: azure/setup-kubectl@v4
+
+    - name: í´ Configurar kubeconfig
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > $HOME/.kube/config 2>/dev/null || echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" > $HOME/.kube/config
+
+    - name: í¿¡ Deploy Canary (10% trÃ¡fego)
+      run: |
+        # Aplicar manifests base
+        kubectl apply -f kubernetes/base/
+        
+        # Criar deployment canary
+        kubectl create deployment pedidos-service-canary \
+          --image=${{ secrets.DOCKER_USERNAME }}/pedidos-service:${{ github.ref_name }} \
+          -n pedidos-veloz --dry-run=client -o yaml | kubectl apply -f -
+        
+        kubectl scale deployment pedidos-service-canary -n pedidos-veloz --replicas=1
+        
+        # Aguardar canary estar pronto
+        kubectl rollout status deployment/pedidos-service-canary -n pedidos-veloz --timeout=3m
+
+    - name: âœ… Validar Canary
+      run: |
+        # Testar o pod canary
+        CANARY_POD=$(kubectl get pods -n pedidos-veloz -l app=pedidos-service-canary -o jsonpath='{.items[0].metadata.name}')
+        kubectl port-forward -n pedidos-veloz pod/$CANARY_POD 3001:3001 &
+        sleep 10
+        curl -f http://localhost:3001/health || exit 1
+        pkill -f "kubectl port-forward"
+
+    - name: í¿¢ Promover para produÃ§Ã£o
+      run: |
+        # Atualizar deployment principal
+        kubectl set image deployment/pedidos-service \
+          pedidos-service=${{ secrets.DOCKER_USERNAME }}/pedidos-service:${{ github.ref_name }} \
+          -n pedidos-veloz --record
+        
+        # Aguardar rollout
+        kubectl rollout status deployment/pedidos-service -n pedidos-veloz --timeout=5m
+        
+        # Remover canary
+        kubectl delete deployment pedidos-service-canary -n pedidos-veloz
+
+    - name: í³¢ Notificar sucesso
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: 'í¾‰ **Deploy realizado com sucesso!**\n\n' +
+                  'âœ… VersÃ£o: ${{ github.ref_name }}\n' +
+                  'âœ… Ambiente: ${{ github.event.inputs.environment || \'production\' }}\n' +
+                  'âœ… ServiÃ§os: Pedidos, Pagamentos, Estoque\n' +
+                  'í³Š Dashboard: https://grafana.pedidos-veloz.com'
+          })
