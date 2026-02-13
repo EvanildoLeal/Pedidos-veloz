@@ -1,7 +1,5 @@
 # 🛵 Pedidos Veloz - Plataforma de Microsserviços em Nuvem
 
-<div align="center">
-
 ![Version](https://img.shields.io/badge/version-2.0.0-blue)
 ![Kubernetes](https://img.shields.io/badge/kubernetes-1.28+-blue)
 ![Docker](https://img.shields.io/badge/docker-24.0+-blue)
@@ -137,9 +135,9 @@ docker-compose logs -f
 📊 Serviços Disponíveis
 Serviço	URL	Credenciais
 API Gateway	http://localhost:8080	-
-Pedidos API	http://localhost:3001/health	-
-Pagamentos API	http://localhost:3002/health	-
-Estoque API	http://localhost:3003/health	-
+Pedidos API	http://localhost:3001/health-
+Pagamentos API http://localhost:3002/health	-
+Estoque API	http://localhost:3003/health
 Grafana	http://localhost:3000	admin / admin
 Prometheus	http://localhost:9090	-
 Jaeger	http://localhost:16686	-
@@ -355,11 +353,11 @@ pedidos-veloz/
 Componente Status Observação
 Docker Compose 🟢 Funcionando 10 containers
 Kubernetes	🟢 Funcionando	7 pods
-CI/CD	🟢 Configurado	GitHub Actions
+CI/CD 🟢 Configurado	GitHub Actions
 Observabilidade	🟢 Completa	Prometheus + Grafana + Jaeger
 Auto-scaling	🟢 Configurado	HPA
-Segurança	🟢 Implementada	Non-root + Multi-stage
-Documentação	🟢 Completa	5 arquivos .md
+Segurança 🟢 Implementada Non-root + Multi-stage
+Documentação 🟢 Completa 5 arquivos .md
 👥 Contribuição
 Fork o projeto
 
